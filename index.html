@@ -4,6 +4,59 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Grand Street Roleplay — Форум</title>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ FIREBASE (Google, бесплатно навсегда)
+     ═══════════════════════════════════════════════════════════════
+     Как настроить (5 минут, один раз):
+     1. Зайди на https://console.firebase.google.com
+     2. Нажми "Add project" → придумай любое название → создай проект
+     3. В левом меню: Build → Firestore Database → Create database
+        → выбери любой регион → режим "Start in test mode" → Enable
+     4. Слева вверху рядом с "Project Overview" нажми на шестерёнку ⚙️
+        → Project settings → вкладка "General" → долистай до "Your apps"
+        → нажми иконку "</>" (Web) → придумай имя приложения → Register app
+     5. Скопируй появившийся объект firebaseConfig и вставь ВМЕСТО
+        значений "ВСТАВЬ_СЮДА" ниже
+     6. В Firestore Database → вкладка "Rules" вставь это и нажми Publish:
+        rules_version = '2';
+        service cloud.firestore {
+          match /databases/{database}/documents {
+            match /{document=**} { allow read, write: if true; }
+          }
+        }
+     ═══════════════════════════════════════════════════════════════ -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
+  import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBxwNpFf3uXLZ8SVTArfJTiaaGEqNlShYY",
+    authDomain: "forum-db70f.firebaseapp.com",
+    projectId: "forum-db70f"
+    storageBucket: "forum-db70f.firebasestorage.app",
+    messagingSenderId: "228521555435",
+    appId: "1:228521555435:web:8aa37e9ec0e3581a4f55ae"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  window.__fbGet = async function(docId){
+    try{
+      const snap = await getDoc(doc(db,'gsrp_data',docId));
+      if(!snap.exists()) return null;
+      const data = snap.data();
+      return (data && data.v!==undefined) ? data.v : null;
+    }catch(e){ console.error('Firestore get error:', e); return null; }
+  };
+  window.__fbSet = async function(docId, jsonString){
+    try{ await setDoc(doc(db,'gsrp_data',docId), { v: jsonString }); return true; }
+    catch(e){ console.error('Firestore set error:', e); return false; }
+  };
+  window.__firebaseReady = true;
+</script>
+
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -278,15 +331,32 @@ var S = {
   ignoreList:[],forceShow:{},bannedList:[],banInfo:null
 };
 
-// ═══════════ STORAGE ═══════════
+// ═══════════ STORAGE (реальная база данных Firebase Firestore) ═══════════
+// 'xf:user' — это указатель сессии ТОЛЬКО этого браузера, хранится локально.
+// Все остальные ключи ('xf:accs','xf:t:*','xf:p:*' и т.д.) хранятся в облаке Firestore
+// и видны всем посетителям сайта — это и есть настоящее общее хранилище.
 var MEM = {};
 function sg(k,sh){
-  return window.storage ? window.storage.get(k,!!sh).then(function(r){ return r?JSON.parse(r.value):null; }).catch(function(){ return MEM[k]!==undefined?MEM[k]:null; }) : Promise.resolve(MEM[k]!==undefined?MEM[k]:null);
+  if(k==='xf:user'){
+    try{ var raw=localStorage.getItem('gsrp_session'); return Promise.resolve(raw?JSON.parse(raw):null); }
+    catch(e){ return Promise.resolve(null); }
+  }
+  var docId = sh ? k : (k+'_'+(S.user?S.user.name:'anon'));
+  if(!window.__fbGet) return Promise.resolve(MEM[docId]!==undefined?MEM[docId]:null);
+  return window.__fbGet(docId).then(function(raw){
+    if(raw===null||raw===undefined) return null;
+    try{ return JSON.parse(raw); }catch(e){ return null; }
+  }).catch(function(){ return MEM[docId]!==undefined?MEM[docId]:null; });
 }
 function ss(k,v,sh){
-  MEM[k]=v;
-  if(window.storage){ try{ return window.storage.set(k,JSON.stringify(v),!!sh).then(function(){return true;}).catch(function(){return true;}); }catch(e){} }
-  return Promise.resolve(true);
+  if(k==='xf:user'){
+    try{ if(v===null||v===undefined) localStorage.removeItem('gsrp_session'); else localStorage.setItem('gsrp_session',JSON.stringify(v)); }catch(e){}
+    return Promise.resolve(true);
+  }
+  var docId = sh ? k : (k+'_'+(S.user?S.user.name:'anon'));
+  MEM[docId]=v;
+  if(!window.__fbSet) return Promise.resolve(true);
+  return window.__fbSet(docId,JSON.stringify(v)).then(function(){ return true; }).catch(function(){ return true; });
 }
 
 // ═══════════ HELPERS ═══════════
@@ -1054,42 +1124,4 @@ function doReply(){
 }
 function upPC(u){ sg('xf:accs',true).then(function(accs){ accs=accs||[]; var i=accs.findIndex(function(a){ return a.name===u.name; }); if(i!==-1){accs[i].postCount=(accs[i].postCount||0)+1;ss('xf:accs',accs,true);} var u2=Object.assign({},u,{postCount:(u.postCount||0)+1}); ss('xf:user',u2); S.user=u2; }); }
 function setRx(pid,em){ var u=S.user; if(!u){openM('login');return;} sg('xf:p:'+S.tid,true).then(function(ps){ ps=ps||[]; var i=ps.findIndex(function(p){ return p.id===pid; }); if(i===-1) return; var p=ps[i]; var rx=Object.assign({},p.rx||{}); rx[em]=rx[em]||[]; var was=rx[em].indexOf(u.name)>=0; rx[em]=was?rx[em].filter(function(x){ return x!==u.name; }):[].concat(rx[em],[u.name]); ps[i]=Object.assign({},p,{rx:rx}); ss('xf:p:'+S.tid,ps,true); S.posts=ps; toast(was?em+' убрана':em+' поставлена!'); render(); }); }
-function qPost(i){ S.quotedPost=S.posts[i]; var qb=document.getElementById('qbblock'); if(qb){qb.style.display='block';document.getElementById('qba').textContent=(S.quotedPost.au)+' написал(а):';document.getElementById('qbt').textContent=S.quotedPost.txt.slice(0,300)+(S.quotedPost.txt.length>300?'...':'');} document.getElementById('rbox')&&document.getElementById('rbox').scrollIntoView({behavior:'smooth'}); document.getElementById('rt')&&document.getElementById('rt').focus(); }
-function clearQ(){ S.quotedPost=null; var q=document.getElementById('qbblock'); if(q)q.style.display='none'; }
-function chPfx(id){ sg('xf:t:'+S.fid,true).then(function(ta){ ta=ta||[]; var i=ta.findIndex(function(t){ return t.id===S.tid; }); if(i!==-1){ta[i].pfx=id;ss('xf:t:'+S.fid,ta,true);S.tmeta=ta[i];toast('Префикс изменён');render();} }); }
-function trackOnline(name){ sg('xf:online',true).then(function(onl){ onl=onl||{}; onl[name]=Date.now(); ss('xf:online',onl,true); }).catch(function(){}); }
-function selPfx(id){ S.selPfx=id; document.querySelectorAll('[data-selpfx]').forEach(function(el){ var pid=el.dataset.selpfx; var p=pfxBy(pid); el.style.borderColor=pid===id?(p.c||'#E8212B'):'rgba(255,255,255,.08)'; el.style.background=pid===id?(p.b||'rgba(232,33,43,.12)'):'transparent'; el.style.color=pid===id?(p.c||'#E8212B'):'#555'; }); }
-function wt(o,c){ var ta=document.getElementById('rt'); if(!ta) return; var s=ta.selectionStart,e2=ta.selectionEnd,sel=ta.value.substring(s,e2); ta.value=ta.value.substring(0,s)+o+sel+c+ta.value.substring(e2); ta.selectionStart=s+o.length;ta.selectionEnd=s+o.length+sel.length;ta.focus(); }
-function wtN(o,c){ var ta=document.getElementById('nb'); if(!ta) return; var s=ta.selectionStart,e2=ta.selectionEnd,sel=ta.value.substring(s,e2); ta.value=ta.value.substring(0,s)+o+sel+c+ta.value.substring(e2); ta.selectionStart=s+o.length;ta.selectionEnd=s+o.length+sel.length;ta.focus(); }
-function toggleDD(){ S.ddOpen=!S.ddOpen; var dd=document.getElementById('ddm'); if(dd) dd.classList.toggle('on',S.ddOpen); }
-
-// ═══════════ INIT ═══════════
-function init(){
-  sg('xf:accs',true).then(function(accs){
-    accs=accs||[];
-    if(!accs.find(function(a){ return a.name==='Owner'; })){
-      accs.unshift({name:'Owner',pass:'asdxze123',group:'founder',joinDate:Date.now(),postCount:0,title:'Создатель проекта'});
-      return ss('xf:accs',accs,true);
-    }
-  }).then(function(){
-    return sg('xf:structure',true);
-  }).then(function(customTree){
-    if(customTree && customTree.length){ TREE=customTree; } else { TREE=DEFAULT_TREE; }
-    rebuildAllF();
-    render(); loadStats();
-    return sg('xf:user');
-  }).then(function(u){
-    if(!u){ return loadBanned(); }
-    return sg('xf:banned',true).then(function(blist){
-      blist=blist||[]; S.bannedList=blist;
-      var ban=blist.find(function(b){ return b.name.toLowerCase()===u.name.toLowerCase(); });
-      if(ban){ S.page='banned'; S.banInfo=ban; return ss('xf:user',null); }
-      S.user=u;
-      return loadIgnore();
-    });
-  }).then(function(){ render(); });
-}
-init();
-</script>
-</body>
-</html>
+function qPost(i){ S.quotedPost=S.posts[i]; var qb=document.getElementById('qbblock'); if(qb){qb.style.display='block';document.getElementById('qba').textContent=(S.quotedPost.au)+' написал(а):';document.getElementById('qbt').textContent=S.quotedPost.
